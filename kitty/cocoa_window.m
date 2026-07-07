@@ -12,6 +12,7 @@
 #include <Availability.h>
 #include <Carbon/Carbon.h>
 #include <Cocoa/Cocoa.h>
+#include <ApplicationServices/ApplicationServices.h>
 #import <IOKit/IOKitLib.h>
 #include <UserNotifications/UserNotifications.h>
 #import <AudioToolbox/AudioServices.h>
@@ -908,10 +909,212 @@ cocoa_create_global_menu(void) {
 #undef MENU_ITEM
 }
 
+// Quick access global hotkey {{{
+// a chord like opt+space uses RegisterEventHotKey and needs no permission
+// double-tap-cmd uses a CGEventTap and needs Accessibility
+
+static EventHotKeyRef quick_access_hotkey_ref = NULL;
+static EventHandlerRef quick_access_hotkey_handler = NULL;
+static CFMachPortRef quick_access_event_tap = NULL;
+static CFRunLoopSourceRef quick_access_tap_source = NULL;
+static CGEventFlags quick_access_target_mask = 0;
+static bool qa_mask_down = false, qa_dirty = false;
+static monotonic_t qa_down_time = 0, qa_last_tap_time = 0;
+
+static bool
+quick_access_key_name_to_keycode(const char *key, UInt32 *out) {
+    static const struct { const char *name; UInt32 code; } named[] = {
+        {"space", kVK_Space}, {"tab", kVK_Tab}, {"enter", kVK_Return}, {"return", kVK_Return},
+        {"escape", kVK_Escape}, {"esc", kVK_Escape},
+        {"f1", kVK_F1}, {"f2", kVK_F2}, {"f3", kVK_F3}, {"f4", kVK_F4},
+        {"f5", kVK_F5}, {"f6", kVK_F6}, {"f7", kVK_F7}, {"f8", kVK_F8},
+        {"f9", kVK_F9}, {"f10", kVK_F10}, {"f11", kVK_F11}, {"f12", kVK_F12},
+    };
+    for (size_t i = 0; i < arraysz(named); i++) if (strcmp(key, named[i].name) == 0) { *out = named[i].code; return true; }
+    if (key[0] && !key[1]) {
+        switch (key[0]) {
+            case 'a': *out = kVK_ANSI_A; return true; case 'b': *out = kVK_ANSI_B; return true;
+            case 'c': *out = kVK_ANSI_C; return true; case 'd': *out = kVK_ANSI_D; return true;
+            case 'e': *out = kVK_ANSI_E; return true; case 'f': *out = kVK_ANSI_F; return true;
+            case 'g': *out = kVK_ANSI_G; return true; case 'h': *out = kVK_ANSI_H; return true;
+            case 'i': *out = kVK_ANSI_I; return true; case 'j': *out = kVK_ANSI_J; return true;
+            case 'k': *out = kVK_ANSI_K; return true; case 'l': *out = kVK_ANSI_L; return true;
+            case 'm': *out = kVK_ANSI_M; return true; case 'n': *out = kVK_ANSI_N; return true;
+            case 'o': *out = kVK_ANSI_O; return true; case 'p': *out = kVK_ANSI_P; return true;
+            case 'q': *out = kVK_ANSI_Q; return true; case 'r': *out = kVK_ANSI_R; return true;
+            case 's': *out = kVK_ANSI_S; return true; case 't': *out = kVK_ANSI_T; return true;
+            case 'u': *out = kVK_ANSI_U; return true; case 'v': *out = kVK_ANSI_V; return true;
+            case 'w': *out = kVK_ANSI_W; return true; case 'x': *out = kVK_ANSI_X; return true;
+            case 'y': *out = kVK_ANSI_Y; return true; case 'z': *out = kVK_ANSI_Z; return true;
+            case '0': *out = kVK_ANSI_0; return true; case '1': *out = kVK_ANSI_1; return true;
+            case '2': *out = kVK_ANSI_2; return true; case '3': *out = kVK_ANSI_3; return true;
+            case '4': *out = kVK_ANSI_4; return true; case '5': *out = kVK_ANSI_5; return true;
+            case '6': *out = kVK_ANSI_6; return true; case '7': *out = kVK_ANSI_7; return true;
+            case '8': *out = kVK_ANSI_8; return true; case '9': *out = kVK_ANSI_9; return true;
+        }
+    }
+    return false;
+}
+
+static bool
+parse_quick_access_hotkey(const char *spec, UInt32 *keycode, UInt32 *carbon_mods) {
+    if (!spec || !spec[0]) return false;
+    char buf[128];
+    size_t n = strlen(spec);
+    if (n == 0 || n >= sizeof(buf)) return false;
+    for (size_t i = 0; i <= n; i++) { char c = spec[i]; buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+    if (strcmp(buf, "none") == 0) return false;
+    UInt32 mods = 0;
+    char *saveptr = NULL, *tokens[16]; int ntok = 0;
+    for (char *tok = strtok_r(buf, "+", &saveptr); tok && ntok < 16; tok = strtok_r(NULL, "+", &saveptr)) tokens[ntok++] = tok;
+    if (ntok < 1) return false;
+    for (int i = 0; i < ntok - 1; i++) {
+        const char *m = tokens[i];
+        if (!strcmp(m, "ctrl") || !strcmp(m, "control")) mods |= controlKey;
+        else if (!strcmp(m, "cmd") || !strcmp(m, "command") || !strcmp(m, "super")) mods |= cmdKey;
+        else if (!strcmp(m, "alt") || !strcmp(m, "opt") || !strcmp(m, "option")) mods |= optionKey;
+        else if (!strcmp(m, "shift")) mods |= shiftKey;
+        else { log_error("Unknown modifier '%s' in macos_quick_access_hotkey", m); return false; }
+    }
+    UInt32 kc = 0;
+    if (!quick_access_key_name_to_keycode(tokens[ntok - 1], &kc)) {
+        log_error("Unknown key '%s' in macos_quick_access_hotkey", tokens[ntok - 1]);
+        return false;
+    }
+    *keycode = kc; *carbon_mods = mods;
+    return true;
+}
+
+static OSStatus
+quick_access_hotkey_handler_fn(EventHandlerCallRef nextHandler UNUSED, EventRef event UNUSED, void *userData UNUSED) {
+    set_cocoa_pending_action(QUICK_ACCESS_TERMINAL, NULL);
+    return noErr;
+}
+
+// parse a spec like double-tap-cmd into the modifier mask to watch
+static bool
+parse_double_tap_spec(const char *spec, CGEventFlags *mask) {
+    if (!spec) return false;
+    char buf[64];
+    size_t n = strlen(spec);
+    if (n == 0 || n >= sizeof(buf)) return false;
+    for (size_t i = 0; i <= n; i++) { char c = spec[i]; buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+    const char *p = NULL;
+    if (strncmp(buf, "double-tap-", 11) == 0) p = buf + 11;
+    else if (strncmp(buf, "doubletap-", 10) == 0) p = buf + 10;
+    else return false;
+    if (!strcmp(p, "cmd") || !strcmp(p, "command") || !strcmp(p, "super")
+        || !strcmp(p, "left-cmd") || !strcmp(p, "right-cmd")
+        || !strcmp(p, "left-command") || !strcmp(p, "right-command")) *mask = kCGEventFlagMaskCommand;
+    else if (!strcmp(p, "opt") || !strcmp(p, "option") || !strcmp(p, "alt")) *mask = kCGEventFlagMaskAlternate;
+    else if (!strcmp(p, "ctrl") || !strcmp(p, "control")) *mask = kCGEventFlagMaskControl;
+    else if (!strcmp(p, "shift")) *mask = kCGEventFlagMaskShift;
+    else return false;
+    return true;
+}
+
+#define QA_DOUBLE_TAP_INTERVAL 0.30
+#define QA_TAP_MAX_HOLD 0.45
+
+static CGEventRef
+quick_access_tap_callback(CGEventTapProxy proxy UNUSED, CGEventType type, CGEventRef event, void *refcon UNUSED) {
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        if (quick_access_event_tap) CGEventTapEnable(quick_access_event_tap, true);
+        return event;
+    }
+    if (type == kCGEventKeyDown) {  // a keypress means the modifier is part of a chord
+        qa_dirty = true;
+        qa_last_tap_time = 0;
+        return event;
+    }
+    if (type == kCGEventFlagsChanged) {
+        CGEventFlags flags = CGEventGetFlags(event);
+        CGEventFlags others = (kCGEventFlagMaskCommand | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl | kCGEventFlagMaskShift) & ~quick_access_target_mask;
+        bool now_down = (flags & quick_access_target_mask) != 0;
+        bool other_down = (flags & others) != 0;
+        monotonic_t now = monotonic();
+        if (now_down && !qa_mask_down) {
+            qa_mask_down = true;
+            qa_down_time = now;
+            qa_dirty = other_down;
+        } else if (!now_down && qa_mask_down) {
+            qa_mask_down = false;
+            bool clean = !qa_dirty && !other_down && (now - qa_down_time) <= s_double_to_monotonic_t(QA_TAP_MAX_HOLD);
+            if (clean && qa_last_tap_time != 0 && (now - qa_last_tap_time) <= s_double_to_monotonic_t(QA_DOUBLE_TAP_INTERVAL)) {
+                qa_last_tap_time = 0;
+                set_cocoa_pending_action(QUICK_ACCESS_TERMINAL, NULL);
+            } else {
+                qa_last_tap_time = clean ? now : 0;
+            }
+        } else if (other_down) {
+            qa_dirty = true;
+        }
+    }
+    return event;
+}
+
+static void
+quick_access_teardown_tap(void) {
+    if (quick_access_tap_source) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), quick_access_tap_source, kCFRunLoopCommonModes);
+        CFRelease(quick_access_tap_source);
+        quick_access_tap_source = NULL;
+    }
+    if (quick_access_event_tap) {
+        CGEventTapEnable(quick_access_event_tap, false);
+        CFRelease(quick_access_event_tap);
+        quick_access_event_tap = NULL;
+    }
+    quick_access_target_mask = 0;
+    qa_mask_down = qa_dirty = false;
+    qa_down_time = qa_last_tap_time = 0;
+}
+
+static void
+quick_access_setup_tap(CGEventFlags mask) {
+    NSDictionary *opts = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    bool trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+    CGEventMask evmask = CGEventMaskBit(kCGEventFlagsChanged) | CGEventMaskBit(kCGEventKeyDown);
+    CFMachPortRef tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, evmask, quick_access_tap_callback, NULL);
+    if (!tap) {
+        log_error("macos_quick_access_hotkey double-tap needs the Accessibility permission. Grant kitty in System Settings > Privacy & Security > Accessibility, then restart kitty (trusted=%d)", (int)trusted);
+        return;
+    }
+    quick_access_event_tap = tap;
+    quick_access_target_mask = mask;
+    quick_access_tap_source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+    CFRunLoopAddSource(CFRunLoopGetMain(), quick_access_tap_source, kCFRunLoopCommonModes);
+    CGEventTapEnable(tap, true);
+}
+
+static void
+cocoa_register_quick_access_hotkey(void) {
+    if (quick_access_hotkey_ref) { UnregisterEventHotKey(quick_access_hotkey_ref); quick_access_hotkey_ref = NULL; }
+    quick_access_teardown_tap();
+    const char *spec = OPT(macos_quick_access_hotkey);
+    CGEventFlags mask = 0;
+    if (parse_double_tap_spec(spec, &mask)) { quick_access_setup_tap(mask); return; }
+    UInt32 keycode = 0, mods = 0;
+    if (!parse_quick_access_hotkey(spec, &keycode, &mods)) return;
+    if (!quick_access_hotkey_handler) {
+        EventTypeSpec ev = { .eventClass = kEventClassKeyboard, .eventKind = kEventHotKeyPressed };
+        InstallEventHandler(GetApplicationEventTarget(), quick_access_hotkey_handler_fn, 1, &ev, NULL, &quick_access_hotkey_handler);
+    }
+    EventHotKeyID hkID = { .signature = 'ktQA', .id = 1 };
+    OSStatus st = RegisterEventHotKey(keycode, mods, hkID, GetApplicationEventTarget(), 0, &quick_access_hotkey_ref);
+    if (st != noErr) {
+        log_error("Failed to register macos_quick_access_hotkey '%s' (error %d), it may already be in use by another application",
+                  spec, (int)st);
+        quick_access_hotkey_ref = NULL;
+    }
+}
+// }}}
+
 void
 cocoa_application_lifecycle_event(bool application_launch_finished) {
     if (application_launch_finished) {  // applicationDidFinishLaunching
         application_has_finished_launching = true;
+        cocoa_register_quick_access_hotkey();
     } else cocoa_create_global_menu();  // applicationWillFinishLaunching
 }
 
@@ -959,6 +1162,7 @@ cocoa_recreate_global_menu(void) {
     }
     secure_input_title_menu = NULL;
     cocoa_create_global_menu();
+    cocoa_register_quick_access_hotkey();
     SecureKeyboardEntryController *k = [SecureKeyboardEntryController sharedInstance];
     update_secure_input_menu_bar_indicator(k.isDesired);
 }
@@ -1003,6 +1207,32 @@ void
 cocoa_focus_window(void *w) {
     NSWindow *window = (NSWindow*)w;
     [window makeKeyWindow];
+}
+
+bool
+cocoa_window_is_key(void *w) {
+    // true only when kitty is active and this is its key window
+    return [NSApp isActive] && [NSApp keyWindow] == (NSWindow*)w;
+}
+
+static void
+qa_raise_self(void) {
+    if (@available(macOS 14.0, *)) [NSApp activate];
+    else [NSApp activateIgnoringOtherApps:YES];
+    AXUIElementRef app = AXUIElementCreateApplication([[NSProcessInfo processInfo] processIdentifier]);
+    if (app) {
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute, kCFBooleanTrue);
+        CFRelease(app);
+    }
+}
+
+void
+cocoa_bring_to_front(void) {
+    qa_raise_self();
+    // re-assert once the run loop settles, the app you tapped from can reclaim focus first
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        qa_raise_self();
+    });
 }
 
 long

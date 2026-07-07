@@ -209,6 +209,9 @@ bell_theme(PyObject *src, Options *opts) { STR_SETTER(bell_theme); }
 static inline void
 window_logo_path(PyObject *src, Options *opts) { STR_SETTER(default_window_logo); }
 
+static inline void
+macos_quick_access_hotkey(PyObject *src, Options *opts) { STR_SETTER(macos_quick_access_hotkey); }
+
 #undef STR_SETTER
 
 static void

@@ -142,6 +142,7 @@ typedef struct _GLFWwindowNS
     bool            maximized;
     bool            retina;
     bool            in_traditional_fullscreen;
+    bool            traditional_fullscreen_ignores_safe_area;
     bool            in_fullscreen_transition;
     bool            suppress_frame_constraints;
     id              notch_cover_window;

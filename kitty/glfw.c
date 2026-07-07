@@ -2338,6 +2338,14 @@ cocoa_hide_app(PYNOARG) {
 }
 
 static PyObject*
+cocoa_bring_app_to_front(PYNOARG) {
+#ifdef __APPLE__
+    cocoa_bring_to_front();
+#endif
+    Py_RETURN_NONE;
+}
+
+static PyObject*
 cocoa_hide_other_apps(PYNOARG) {
 #ifdef __APPLE__
     cocoa_hide_others();
@@ -2989,9 +2997,25 @@ toggle_os_window_visibility(PyObject *self UNUSED, PyObject *args, PyObject *kw)
     if (!w || !w->handle) Py_RETURN_FALSE;
     bool is_visible = glfwGetWindowAttrib(w->handle, GLFW_VISIBLE) != 0;
     if (set_visible == -1) set_visible = !is_visible;
-    else if (set_visible == is_visible) Py_RETURN_FALSE;
+    // re-show an already visible window when moving it to the active screen so it is raised
+    else if (set_visible == is_visible && !(set_visible && move_to_active_screen)) Py_RETURN_FALSE;
     set_os_window_visibility(w, set_visible, move_to_active_screen);
     Py_RETURN_TRUE;
+}
+
+static PyObject*
+is_os_window_key(PyObject *self UNUSED, PyObject *wid_obj) {
+    unsigned long long wid = PyLong_AsUnsignedLongLong(wid_obj);
+    if (PyErr_Occurred()) return NULL;
+    OSWindow *w = os_window_for_id(wid);
+    if (w && w->handle) {
+#ifdef __APPLE__
+        if (cocoa_window_is_key(glfwGetCocoaWindow(w->handle))) Py_RETURN_TRUE;
+#else
+        if (glfwGetWindowAttrib(w->handle, GLFW_FOCUSED)) Py_RETURN_TRUE;
+#endif
+    }
+    Py_RETURN_FALSE;
 }
 
 static PyObject*
@@ -3203,6 +3227,7 @@ static PyMethodDef module_methods[] = {
     METHODB(set_custom_cursor, METH_VARARGS),
     METHODB(is_css_pointer_name_valid, METH_O),
     {"toggle_os_window_visibility", (PyCFunction)(void (*) (void))(toggle_os_window_visibility), METH_VARARGS | METH_KEYWORDS, NULL},
+    METHODB(is_os_window_key, METH_O),
     METHODB(layer_shell_config_for_os_window, METH_O),
     METHODB(set_layer_shell_config, METH_VARARGS),
     METHODB(grab_keyboard, METH_O),
@@ -3241,6 +3266,7 @@ static PyMethodDef module_methods[] = {
 #endif
     METHODB(cocoa_window_id, METH_O),
     METHODB(cocoa_hide_app, METH_NOARGS),
+    METHODB(cocoa_bring_app_to_front, METH_NOARGS),
     METHODB(cocoa_hide_other_apps, METH_NOARGS),
     METHODB(cocoa_minimize_os_window, METH_VARARGS),
     {"glfw_init", (PyCFunction)glfw_init, METH_VARARGS, ""},

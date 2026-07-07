@@ -1354,6 +1354,7 @@ process_cocoa_pending_actions(void) {
     if (cocoa_pending_actions[QUIT]) { call_boss(quit, NULL); }
     if (cocoa_pending_actions[PASTE_FROM_CLIPBOARD]) { call_boss(paste_from_clipboard, NULL); }
     if (cocoa_pending_actions[COPY_OR_NOOP]) { call_boss(copy_or_noop, NULL); }
+    if (cocoa_pending_actions[QUICK_ACCESS_TERMINAL]) { call_boss(quick_access_terminal_invoked, NULL); }
     if (cocoa_pending_actions_data.wd) {
         if (cocoa_pending_actions[NEW_OS_WINDOW_WITH_WD]) { call_boss(new_os_window_with_wd, "sO", cocoa_pending_actions_data.wd, Py_True); }
         if (cocoa_pending_actions[NEW_TAB_WITH_WD]) { call_boss(new_tab_with_wd, "sO", cocoa_pending_actions_data.wd, Py_True); }

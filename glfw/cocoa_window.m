@@ -2619,6 +2619,17 @@ is_same_screen(NSScreen *screenA, NSScreen * screenB) {
 
 static void
 move_window_to_screen(_GLFWwindow *window, NSScreen *target) {
+    if (window->ns.in_traditional_fullscreen) {
+        // refit fullscreen to the target display and repaint the notch cover
+        // caller must show the window first, macOS clamps a hidden window to the main display
+        NSRect screenFrame = [target frame];
+        if (!window->ns.traditional_fullscreen_ignores_safe_area) {
+            if (@available(macOS 12.0, *)) screenFrame.size.height -= target.safeAreaInsets.top;
+        }
+        [window->ns.object setFrame:screenFrame display:YES animate:NO];
+        _glfwUpdateNotchCover(window);
+        return;
+    }
     NSRect screenFrame = [target visibleFrame];
     NSRect windowFrame = [window->ns.object frame];
     CGFloat newX = NSMidX(screenFrame) - (windowFrame.size.width / 2.0);
@@ -2924,12 +2935,18 @@ void _glfwPlatformShowWindow(_GLFWwindow* window, bool move_to_active_screen)
 {
     const bool is_background = window->ns.layer_shell.is_active && window->ns.layer_shell.config.type == GLFW_LAYER_SHELL_BACKGROUND;
     NSWindow *nw = window->ns.object;
+    NSScreen *deferred_target_screen = nil;
     if (move_to_active_screen) {
         NSScreen *current_screen = screen_for_window_center(window);
         NSScreen *target_screen = active_screen();
         if (!is_same_screen(current_screen, target_screen)) {
             debug_rendering("Moving OS window %llu to active screen\n", window->id);
-            move_window_to_screen(window, target_screen);
+            if (window->ns.in_traditional_fullscreen) {
+                // refit after showing, macOS clamps a hidden window to the main display
+                deferred_target_screen = target_screen;
+            } else {
+                move_window_to_screen(window, target_screen);
+            }
         }
     }
     if (is_background) {
@@ -2950,6 +2967,7 @@ void _glfwPlatformShowWindow(_GLFWwindow* window, bool move_to_active_screen)
         dispatch_async(dispatch_get_main_queue(), ^{
 			weakSelf.collectionBehavior = old;
 		});
+        if (deferred_target_screen) move_window_to_screen(window, deferred_target_screen);
     }
 }
 
@@ -2997,8 +3015,9 @@ void _glfwPlatformFocusWindow(_GLFWwindow* window)
         [window->ns.object deminiaturize:nil];
     }
     if ([window->ns.object canBecomeKeyWindow]) {
-        // Make us the active application
-        [NSApp activateIgnoringOtherApps:YES];
+        // activateIgnoringOtherApps: is ignored when another app is active on macOS 14+
+        if (@available(macOS 14.0, *)) [NSApp activate];
+        else [NSApp activateIgnoringOtherApps:YES];
         [window->ns.object makeKeyAndOrderFront:nil];
     }
 }
@@ -3553,6 +3572,7 @@ bool _glfwPlatformToggleFullscreen(_GLFWwindow* w, unsigned int flags) {
                 }
                 [window setFrame:screenFrame display:YES];
                 w->ns.in_traditional_fullscreen = true;
+                w->ns.traditional_fullscreen_ignores_safe_area = ignore_safe_area_insets;
                 if (!ignore_safe_area_insets) _glfwUpdateNotchCover(w);
             } else {
                 made_fullscreen = false;
@@ -4157,7 +4177,8 @@ GLFWAPI void glfwCocoaSetWindowChrome(GLFWwindow *w, unsigned int color, bool us
     // HACK: Changing the style mask can cause the first responder to be cleared
     [nsw makeFirstResponder:window->ns.view];
     window->ns.notch_cover_color = color;
-    window->ns.notch_cover_opacity = background_opacity;
+    // opaque notch strip so the top stays solid when background_opacity < 1
+    window->ns.notch_cover_opacity = 1.0f;
     if (window->ns.notch_cover_window) _glfwUpdateNotchCover(window);
 }}
 

@@ -83,6 +83,7 @@ typedef struct Options {
     float macos_thicken_font;
     WindowTitleIn macos_show_window_title_in;
     char *bell_path, *bell_theme;
+    char *macos_quick_access_hotkey;
     float background_opacity, dim_opacity;
 
     ScrollbarVisibilityPolicy scrollbar;
