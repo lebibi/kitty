@@ -1513,6 +1513,19 @@ convert_from_opts_macos_ns_window_layer(PyObject *py_opts, Options *opts) {
 }
 
 static void
+convert_from_python_macos_quick_access_hotkey(PyObject *val, Options *opts) {
+    macos_quick_access_hotkey(val, opts);
+}
+
+static void
+convert_from_opts_macos_quick_access_hotkey(PyObject *py_opts, Options *opts) {
+    PyObject *ret = PyObject_GetAttrString(py_opts, "macos_quick_access_hotkey");
+    if (ret == NULL) return;
+    convert_from_python_macos_quick_access_hotkey(ret, opts);
+    Py_DECREF(ret);
+}
+
+static void
 convert_from_python_macos_show_window_title_in(PyObject *val, Options *opts) {
     opts->macos_show_window_title_in = window_title_in(val);
 }
@@ -1810,6 +1823,8 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
     convert_from_opts_macos_use_physical_screen_frame(py_opts, opts);
     if (PyErr_Occurred()) return false;
     convert_from_opts_macos_ns_window_layer(py_opts, opts);
+    if (PyErr_Occurred()) return false;
+    convert_from_opts_macos_quick_access_hotkey(py_opts, opts);
     if (PyErr_Occurred()) return false;
     convert_from_opts_macos_show_window_title_in(py_opts, opts);
     if (PyErr_Occurred()) return false;

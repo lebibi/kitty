@@ -83,6 +83,7 @@ from .fast_data_types import (
     background_opacity_of,
     change_background_opacity,
     change_drag_thumbnail,
+    cocoa_bring_app_to_front,
     cocoa_hide_app,
     cocoa_hide_other_apps,
     cocoa_minimize_os_window,
@@ -105,6 +106,7 @@ from .fast_data_types import (
     grab_keyboard,
     is_layer_shell_supported,
     is_modifier_key,
+    is_os_window_key,
     last_focused_os_window_id,
     load_png_data,
     macos_cycle_through_os_windows,
@@ -436,6 +438,7 @@ class Boss:
         # A list of events received so far that are potentially part of a sequence keybinding.
         self.cached_values = cached_values
         self.os_window_map: dict[int, TabManager] = {}
+        self._quick_access_os_window_id: int | None = None
         self.os_window_death_actions: dict[int, Callable[[], None]] = {}
         self.thumbnail_request_queue: deque[PendingThumbnailRequest] = deque()
         # A window drag whose source finished before its drop on kitty was delivered
@@ -1116,8 +1119,21 @@ class Boss:
         return None
 
     def quick_access_terminal_invoked(self) -> None:
-        for os_window_id in self.os_window_map:
-            toggle_os_window_visibility(os_window_id, move_to_active_screen=True)
+        wid = self._quick_access_os_window_id
+        if wid is None or wid not in self.os_window_map:
+            before = set(self.os_window_map)
+            self.startup_first_child(None)
+            created = set(self.os_window_map) - before
+            if created:
+                self._quick_access_os_window_id = next(iter(created))
+            return
+        if is_os_window_key(wid):
+            toggle_os_window_visibility(wid, visible=False)
+        else:  # hidden or behind another app, show it then bring it to the front
+            toggle_os_window_visibility(wid, visible=True, move_to_active_screen=True)
+            focus_os_window(wid, True)
+            if is_macos:
+                cocoa_bring_app_to_front()
 
     def handle_remote_cmd(self, cmd: memoryview, window: Window | None = None) -> None:
         response = self._handle_remote_command(cmd, window)
@@ -1541,6 +1557,8 @@ class Boss:
                 self.launch_urls(*urls)
             else:
                 self.startup_first_child(first_os_window_id, startup_sessions=startup_sessions)
+            if is_macos and get_options().macos_quick_access_hotkey != 'none':
+                self._quick_access_os_window_id = first_os_window_id
 
         if (opts := get_options()).update_check_interval > 0 and not self.update_check_started and getattr(sys, 'frozen', False):
             from .update_check import run_update_check

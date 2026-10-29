@@ -3618,6 +3618,38 @@ simple arithmetic expressions combining them with integers. For example:
 )
 
 opt(
+    'macos_quick_access_hotkey',
+    'none',
+    option_type='str',
+    ctype='!macos_quick_access_hotkey',
+    long_text="""
+Register a global (system-wide) hotkey that shows or hides the quick access
+terminal window and moves it to the display under the mouse cursor, like the hotkey
+window in iTerm2. It works even when kitty is not the focused application. The
+window is the one kitty was started with, so combine this with
+:opt:`macos_traditional_fullscreen` and launching kitty using
+:code:`--start-as=fullscreen` for a full-screen hotkey terminal. Other windows you
+open are left alone.
+
+The value can be a key chord: a list of modifiers followed by a single key joined
+by :code:`+`, for example :code:`opt+space`, :code:`ctrl+cmd+t` or
+:code:`shift+alt+f12`. Modifiers are :code:`ctrl`, :code:`cmd` (also
+:code:`command`/:code:`super`), :code:`alt` (also :code:`opt`/:code:`option`) and
+:code:`shift`. The key is a single ASCII character or one of :code:`space`,
+:code:`tab`, :code:`enter`/:code:`return`, :code:`escape` or :code:`f1` to
+:code:`f12`. A chord uses the Carbon :code:`RegisterEventHotKey` API and needs no
+permission.
+
+The value can instead be a double tap of a bare modifier, one of
+:code:`double-tap-cmd`, :code:`double-tap-opt`, :code:`double-tap-ctrl` or
+:code:`double-tap-shift` (for Command either the left or right key works), like the
+iTerm2 double-tap trigger. This uses a :code:`CGEventTap`, so macOS will ask you to
+grant kitty the Accessibility permission the first time. Set to :code:`none` (the
+default) to disable. Only supported on macOS.
+""",
+)
+
+opt(
     'macos_show_window_title_in',
     'all',
     choices=('all', 'menubar', 'none', 'window'),

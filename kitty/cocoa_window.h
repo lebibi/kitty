@@ -43,11 +43,14 @@ typedef enum {
     COPY_OR_NOOP,
     USER_MENU_ACTION,
     COCOA_NOTIFICATION_UNTRACKED,
+    QUICK_ACCESS_TERMINAL,
 
     NUM_COCOA_PENDING_ACTIONS
 } CocoaPendingAction;
 
 void cocoa_focus_window(void *w);
+bool cocoa_window_is_key(void *w);
+void cocoa_bring_to_front(void);
 long cocoa_window_number(void *w);
 void cocoa_application_lifecycle_event(bool);
 void cocoa_recreate_global_menu(void);

@@ -397,6 +397,7 @@ option_names = (
     'macos_menubar_title_max_length',
     'macos_ns_window_layer',
     'macos_option_as_alt',
+    'macos_quick_access_hotkey',
     'macos_quit_when_last_window_closed',
     'macos_show_window_title_in',
     'macos_thicken_font',
@@ -621,6 +622,7 @@ class Options:
     macos_menubar_title_max_length: int = 0
     macos_ns_window_layer: str = 'unset'
     macos_option_as_alt: int = 0
+    macos_quick_access_hotkey: str = 'none'
     macos_quit_when_last_window_closed: bool = False
     macos_show_window_title_in: choices_for_macos_show_window_title_in = 'all'
     macos_thicken_font: float = 0

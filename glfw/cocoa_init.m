@@ -264,6 +264,19 @@ static NSDictionary<NSString *, NSNumber *> *global_shortcuts = nil;
             }
         }
     }
+    // Re-hide the menu bar when kitty comes back to the front while fullscreen
+    for (_GLFWwindow *window = _glfw.windowListHead; window; window = window->next) {
+        if (window->ns.in_traditional_fullscreen && _glfwPlatformWindowVisible(window)) {
+            [[NSApplication sharedApplication] setPresentationOptions:NSApplicationPresentationAutoHideMenuBar | NSApplicationPresentationAutoHideDock];
+            break;
+        }
+    }
+}
+
+- (void)applicationDidResignActive:(NSNotification *)notification {
+    (void)notification;
+    // Give the menu bar back to whatever app kitty is switching to
+    [[NSApplication sharedApplication] setPresentationOptions:NSApplicationPresentationDefault];
 }
 
 static bool
